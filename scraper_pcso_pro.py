@@ -4,8 +4,8 @@ import json
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
+import sys
 
-# URL de busca da PCSO
 URL = "https://www.pcso.gov.ph/searchlottoresult.aspx"
 
 HEADERS = {
@@ -14,16 +14,10 @@ HEADERS = {
 }
 
 def clean_numbers(number_string):
-    """
-    Extrai apenas os números reais da string, ignorando traços ou espaços extras.
-    Exemplo: "12-45-03-22" -> [12, 45, 3, 22]
-    """
     return [int(n) for n in re.findall(r'\d+', number_string)]
 
 def parse_date(date_string):
-    """ Tenta converter a data para um formato padronizado YYYY-MM-DD para facilitar a ordenação """
     try:
-        # A PCSO costuma usar formatos como "M/D/YYYY" ou "MM/DD/YYYY"
         dt = datetime.strptime(date_string.strip(), "%m/%d/%Y")
         return dt.strftime("%Y-%m-%d")
     except:
@@ -32,51 +26,59 @@ def parse_date(date_string):
 def scrape_pcso_advanced():
     session = requests.Session()
     
-    # PASSO 1: Fazer um GET inicial para pegar os tokens de segurança do ASP.NET
-    print("Acessando a página para capturar tokens de segurança...")
+    print("Passo 1: Acessando a página para capturar estrutura dinâmica...")
     try:
         res_inicial = session.get(URL, headers=HEADERS, timeout=15)
         soup_inicial = BeautifulSoup(res_inicial.text, 'html.parser')
         
-        viewstate = soup_inicial.find('input', {'name': '__VIEWSTATE'})['value'] if soup_inicial.find('input', {'name': '__VIEWSTATE'}) else ''
-        viewstategenerator = soup_inicial.find('input', {'name': '__VIEWSTATEGENERATOR'})['value'] if soup_inicial.find('input', {'name': '__VIEWSTATEGENERATOR'}) else ''
-        eventvalidation = soup_inicial.find('input', {'name': '__EVENTVALIDATION'})['value'] if soup_inicial.find('input', {'name': '__EVENTVALIDATION'}) else ''
+        # Coleta dinamicamente TODOS os inputs ocultos (ViewStates de segurança do ASP.NET)
+        payload = {}
+        for input_tag in soup_inicial.find_all('input'):
+            name = input_tag.get('name')
+            if name:
+                payload[name] = input_tag.get('value', '')
+                
     except Exception as e:
-        print(f"Erro ao capturar tokens: {e}. O layout do site pode ter mudado.")
-        return
+        print(f"Erro ao capturar página inicial: {e}")
+        sys.exit(1) # Força o erro para o GitHub Actions identificar a falha
 
-    # PASSO 2: Montar o payload (simulando que apertamos o botão "Search" para os últimos 30 dias)
+    print("Passo 2: Montando o payload de busca inteligente...")
     hoje = datetime.now()
     mes_passado = hoje - timedelta(days=30)
     
-    # Nota: Os nomes dos campos (ctl00$...) podem variar no site deles. 
-    # Abaixo é a estrutura padrão de WebForms. Se falhar, faremos o parse da tabela inicial.
-    payload = {
-        '__VIEWSTATE': viewstate,
-        '__VIEWSTATEGENERATOR': viewstategenerator,
-        '__EVENTVALIDATION': eventvalidation,
-        # Muitas vezes, submeter os tokens vazios já força o servidor a carregar os últimos dias
-        'ctl00$ctl00$cphContainer$cpContent$ddlStartMonth': mes_passado.strftime('%B'),
-        'ctl00$ctl00$cphContainer$cpContent$ddlStartYear': mes_passado.strftime('%Y'),
-        'ctl00$ctl00$cphContainer$cpContent$ddlEndMonth': hoje.strftime('%B'),
-        'ctl00$ctl00$cphContainer$cpContent$ddlEndYear': hoje.strftime('%Y'),
-        'ctl00$ctl00$cphContainer$cpContent$btnSearch': 'Search Lotto'
-    }
+    # Encontra os nomes exatos das caixas de seleção usando Regex para ignorar prefixos surpresa
+    start_month = soup_inicial.find('select', id=re.compile(r'ddlStartMonth'))
+    start_day = soup_inicial.find('select', id=re.compile(r'ddlStartDate'))
+    start_year = soup_inicial.find('select', id=re.compile(r'ddlStartYear'))
+    
+    end_month = soup_inicial.find('select', id=re.compile(r'ddlEndMonth'))
+    end_day = soup_inicial.find('select', id=re.compile(r'ddlEndDate'))
+    end_year = soup_inicial.find('select', id=re.compile(r'ddlEndYear'))
+    
+    btn_search = soup_inicial.find('input', id=re.compile(r'btnSearch'))
 
-    print("Buscando dados históricos...")
+    # Preenche o formulário com os valores reais baseados nos nomes dinâmicos encontrados
+    if start_month: payload[start_month['name']] = mes_passado.strftime('%B')
+    if start_day: payload[start_day['name']] = str(mes_passado.day).lstrip('0')
+    if start_year: payload[start_year['name']] = mes_passado.strftime('%Y')
+
+    if end_month: payload[end_month['name']] = hoje.strftime('%B')
+    if end_day: payload[end_day['name']] = str(hoje.day).lstrip('0')
+    if end_year: payload[end_year['name']] = hoje.strftime('%Y')
+    
+    if btn_search: payload[btn_search['name']] = 'Search Lotto'
+
+    print("Passo 3: Submetendo a requisição de busca...")
     try:
-        # Fazer o POST para pegar a tabela completa
         res_post = session.post(URL, data=payload, headers=HEADERS, timeout=20)
         soup = BeautifulSoup(res_post.text, 'html.parser')
         
         table = soup.find('table')
         if not table:
-            print("Tabela não encontrada no resultado da busca.")
-            return
+            print("ERRO CRÍTICO: Tabela não encontrada. A estrutura do site foi alterada drasticamente.")
+            sys.exit(1)
 
-        rows = table.find_all('tr')[1:] # Pula o cabeçalho
-        
-        # Dicionários para agrupar os jogos
+        rows = table.find_all('tr')[1:] 
         jogos_dict = defaultdict(list)
 
         for row in rows:
@@ -90,7 +92,6 @@ def scrape_pcso_advanced():
 
                 matriz_numeros = clean_numbers(combinacao_str)
                 
-                # Só adiciona se os números foram extraídos corretamente
                 if matriz_numeros:
                     jogos_dict[nome_jogo].append({
                         "date": data_str,
@@ -100,43 +101,38 @@ def scrape_pcso_advanced():
                         "winners": vencedores
                     })
 
-        # PASSO 3: Estruturar o JSON Final (UI + Análise)
+        if not jogos_dict:
+             print("ERRO: A tabela foi encontrada, mas estava vazia.")
+             sys.exit(1)
+
+        print("Passo 4: Estruturando e Salvando o JSON...")
         json_final = {
             "metadata": {
                 "last_updated_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                 "source": "PCSO Official"
             },
-            "ui_results": {},   # Para a tela de Resultados
-            "analysis_data": {} # Para o Backtesting/Estatísticas
+            "ui_results": {},
+            "analysis_data": {}
         }
 
-        # Filtrar os top 10 mais recentes de cada jogo
         for jogo, resultados in jogos_dict.items():
-            # Ordena por data decrescente (mais recente primeiro)
             resultados.sort(key=lambda x: x['date'], reverse=True)
             top_10 = resultados[:10]
 
-            # 1. Montar os dados visuais para a UI
             json_final["ui_results"][jogo] = [
-                {
-                    "date": r["date"],
-                    "numbers": r["combination_str"],
-                    "jackpot": r["jackpot"],
-                    "winners": r["winners"]
-                } for r in top_10
+                {"date": r["date"], "numbers": r["combination_str"], "jackpot": r["jackpot"], "winners": r["winners"]}
+                for r in top_10
             ]
-
-            # 2. Montar matriz limpa para matemática pesada (LotoLab)
             json_final["analysis_data"][jogo] = [r["combination_array"] for r in top_10]
 
-        # Salvar o arquivo localmente
         with open('pcso_master_data.json', 'w', encoding='utf-8') as f:
             json.dump(json_final, f, ensure_ascii=False, indent=4)
             
-        print(f"Sucesso! Dados processados e salvos. Jogos encontrados: {len(jogos_dict.keys())}")
+        print(f"Sucesso absoluto! JSON gerado com {len(jogos_dict.keys())} loterias diferentes.")
 
     except Exception as e:
-        print(f"Erro durante o processamento: {e}")
+        print(f"Erro fatal durante o processamento: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     scrape_pcso_advanced()
