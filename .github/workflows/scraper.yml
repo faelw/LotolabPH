@@ -2,14 +2,9 @@ name: Scraper PCSO Diario
 
 on:
   schedule:
-    # Roda todos os dias às 06:30, 09:30 e 13:30 UTC 
-    # (Equivalente a 14:30, 17:30 e 21:30 no fuso horário das Filipinas)
     - cron: '30 6,9,13 * * *'
-  
-  # A linha abaixo permite que você rode o script manualmente no painel do GitHub a qualquer momento
   workflow_dispatch: 
 
-# Permissão vital: Garante que o Actions possa salvar (fazer push) do arquivo JSON de volta no repositório
 permissions:
   contents: write 
 
@@ -26,10 +21,12 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Instalar dependências (requirements.txt)
+      - name: Instalar dependências (Playwright)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # A linha abaixo instala o navegador Chrome invisível no servidor
+          playwright install chromium
 
       - name: Executar o Scraper
         run: python scraper_pcso_pro.py
@@ -39,16 +36,11 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action Bot"
           
-          # Verifica se o arquivo JSON realmente existe antes de tentar salvar
           if [ -f "pcso_master_data.json" ]; then
             git add pcso_master_data.json
-            
-            # O '|| true' evita erro se o arquivo existir mas os números sorteados forem idênticos ao do dia anterior
             git commit -m "Auto-update: Novos resultados da PCSO extraídos" || true
-            
             git push
           else
-            echo "ERRO: O arquivo pcso_master_data.json não foi gerado pelo scraper."
-            echo "Verifique os logs do passo 'Executar o Scraper' acima para ver o que o Python retornou."
+            echo "ERRO: O arquivo pcso_master_data.json não foi gerado."
             exit 1
           fi
