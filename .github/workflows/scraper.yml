@@ -38,10 +38,17 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action Bot"
-          git add pcso_master_data.json
           
-          # O '|| true' no final garante que a automação não dê erro (vermelho) 
-          # se o script rodar, mas os resultados forem iguais aos do dia anterior
-          git commit -m "Auto-update: Novos resultados da PCSO extraídos" || true
-          
-          git push
+          # Verifica se o arquivo JSON realmente existe antes de tentar salvar
+          if [ -f "pcso_master_data.json" ]; then
+            git add pcso_master_data.json
+            
+            # O '|| true' evita erro se o arquivo existir mas os números sorteados forem idênticos ao do dia anterior
+            git commit -m "Auto-update: Novos resultados da PCSO extraídos" || true
+            
+            git push
+          else
+            echo "ERRO: O arquivo pcso_master_data.json não foi gerado pelo scraper."
+            echo "Verifique os logs do passo 'Executar o Scraper' acima para ver o que o Python retornou."
+            exit 1
+          fi
