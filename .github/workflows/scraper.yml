@@ -1,0 +1,47 @@
+name: Scraper PCSO Diario
+
+on:
+  schedule:
+    # Roda todos os dias às 06:30, 09:30 e 13:30 UTC 
+    # (Equivalente a 14:30, 17:30 e 21:30 no fuso horário das Filipinas)
+    - cron: '30 6,9,13 * * *'
+  
+  # A linha abaixo permite que você rode o script manualmente no painel do GitHub a qualquer momento
+  workflow_dispatch: 
+
+# Permissão vital: Garante que o Actions possa salvar (fazer push) do arquivo JSON de volta no repositório
+permissions:
+  contents: write 
+
+jobs:
+  atualizar-dados:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências (requirements.txt)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Executar o Scraper
+        run: python scraper_pcso_pro.py
+
+      - name: Salvar e Enviar o novo JSON (Commit e Push)
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          git add pcso_master_data.json
+          
+          # O '|| true' no final garante que a automação não dê erro (vermelho) 
+          # se o script rodar, mas os resultados forem iguais aos do dia anterior
+          git commit -m "Auto-update: Novos resultados da PCSO extraídos" || true
+          
+          git push
